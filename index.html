@@ -11,7 +11,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <link rel="icon" type="image/png" href="./icons/icon-192.png">
-  <link rel="stylesheet" href="./styles.css?v=104">
+  <link rel="stylesheet" href="./styles.css?v=105">
   <title>麗華小說</title>
 </head>
 <body>
@@ -26,11 +26,16 @@
       <div class="shelf-section-title"><strong>我的書架</strong><small id="bookCount">0 本小說</small></div>
       <div id="shelfGrid" class="shelf-grid"></div>
       <div id="shelfEmpty" class="shelf-empty" hidden><div class="empty-cover">書</div><h2>你的書架還是空的</h2><p>選擇 iPhone「檔案」中的 TXT 或 EPUB，即可開始閱讀。</p><button id="sampleBtn" class="soft-button">先閱讀示範小說</button></div>
-      <footer class="shelf-footer">小說檔案只保存在此裝置的瀏覽器中。重要書籍與進度請定期備份。 <span id="appVersion">v1.0.4</span></footer>
+      <footer class="shelf-footer">小說檔案只保存在此裝置的瀏覽器中。重要書籍與進度請定期備份。 <span id="appVersion">v1.0.5</span></footer>
     </section>
 
     <section id="readerView" class="view reader-view" hidden>
       <header class="reader-head"><button id="backToShelf" class="icon-button" aria-label="返回書架">‹</button><button id="readerBookTitle" class="reader-book-title">麗華小說</button><div class="header-tools"><button id="headphoneBtn" class="icon-button" aria-label="開始朗讀" title="開始／暫停朗讀">🎧</button><button id="tocBtn" class="icon-button" aria-label="章節目錄" title="章節目錄">☷</button></div></header>
+      <div id="audioDock" class="audio-dock" hidden>
+        <span id="audioFileName" class="audio-file-name">章節音檔</span>
+        <audio id="backgroundAudio" controls preload="metadata" aria-label="背景音檔播放器"></audio>
+        <button id="closeAudioDock" class="audio-close" aria-label="關閉音檔播放器">×</button>
+      </div>
       <div id="readSpace" class="read-space">
         <div id="pageViewport" class="page-viewport" aria-live="off"><div id="pageBody" class="page-body"></div></div>
         <div id="tapLayer" class="tap-layer"><button id="tapLeft" class="tap-zone" aria-label="翻頁左側"></button><button id="tapCenter" class="tap-zone middle-zone" aria-label="開啟閱讀選單"></button><button id="tapRight" class="tap-zone" aria-label="翻頁右側"></button></div>
@@ -49,9 +54,10 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <div id="measure" class="page-body measure" aria-hidden="true"></div>
     <input id="filePicker" type="file" accept=".txt,.epub,text/plain,application/epub+zip" multiple hidden>
+    <input id="chapterAudioPicker" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg" hidden>
     <input id="backupPicker" type="file" accept=".json,application/json" hidden>
   </div>
-  <script src="./vendor/jszip.min.js?v=104"></script>
-  <script type="module" src="./app.js?v=104"></script>
+  <script src="./vendor/jszip.min.js?v=105"></script>
+  <script type="module" src="./app.js?v=105"></script>
 </body>
 </html>

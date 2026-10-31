@@ -1,16 +1,31 @@
-import {openLibrary,listBooks,getBook,getChapter,getPosition,savePosition,updateBookOpen,removeBook,storeParsedBook,parseBookFile,exportLibrary,restoreLibrary} from './library.js?v=104';
-import {convertChinese} from './converter.js?v=104';
+import {openLibrary,listBooks,getBook,getChapter,getPosition,savePosition,updateBookOpen,removeBook,storeParsedBook,parseBookFile,exportLibrary,restoreLibrary} from './library.js?v=105';
+import {convertChinese} from './converter.js?v=105';
 
-const APP_VERSION='1.0.4';
+const APP_VERSION='1.0.5';
 const $ = id => document.getElementById(id);
-const defaults={direction:'horizontal',script:'original',fontSize:20,lineSpacing:1.25,bold:false,theme:'paper',follow:true,rate:1,pitch:1,showOtherVoices:false,voiceURI:'',voiceName:''};
+const defaults={direction:'horizontal',script:'original',fontSize:20,lineSpacing:1.25,bold:false,theme:'paper',follow:true,rate:1,pitch:1,showOtherVoices:false,experimentalAudioSession:false,voiceURI:'',voiceName:''};
 function readSettings(){
   try {return {...defaults,...JSON.parse(localStorage.getItem('lihuaSettings')||'{}')};}
   catch(e){console.warn('閱讀設定格式損壞，使用預設值',e);return {...defaults};}
 }
 const settings=readSettings();
-const state={book:null,chapter:null,chapterIndex:0,pages:[],pageIndex:0,paragraphs:[],readingOffset:0,speechOffset:0,controls:false,busy:false,loadToken:0,paginationToken:0,activeParagraph:-1,voices:[],allVoices:[],tts:{status:'idle',token:0,chapter:0,offset:0,chunk:null,sleepDeadline:0,waitingForStart:false}};
+const state={book:null,chapter:null,chapterIndex:0,pages:[],pageIndex:0,paragraphs:[],readingOffset:0,speechOffset:0,controls:false,busy:false,loadToken:0,paginationToken:0,activeParagraph:-1,voices:[],allVoices:[],tts:{status:'idle',token:0,chapter:0,offset:0,chunk:null,sleepDeadline:0,waitingForStart:false,needsRestart:false}};
 const synthesis='speechSynthesis' in window ? window.speechSynthesis:null;
+// The browser's TTS output is NOT a media file. HTMLAudioElement is an optional,
+// independent mode for user-supplied pre-generated chapter audio.
+let chapterAudioUrl=null;
+let lastSwipeAt=0;
+const speechSwipe={startX:0,startY:0,startAt:0,tracking:false,disabled:false};
+function configureAudioSession(){
+  if(!settings.experimentalAudioSession)return false;
+  try{
+    if(!navigator.audioSession)return false;
+    navigator.audioSession.type='playback';
+    return navigator.audioSession.type==='playback';
+  }catch(e){console.warn('audioSession unsupported',e);return false;}
+}
+function isSpeechActive(){return state.tts.status==='playing'||state.tts.status==='paused';}
+
 let toastTimeout,resizeTimer,saveTimer;
 window.addEventListener('error',event=>{
   console.error('麗華小說執行錯誤',event.error||event.message);
@@ -32,6 +47,7 @@ function applyTheme(){ $('app').className=`app theme-${settings.theme}`;document
 function bookSubtitle(book){return `${book.format} · ${book.chapterCount} 個章節`;}
 function textEl(tag,cls,text){const el=document.createElement(tag);if(cls)el.className=cls;el.textContent=text;return el;}
 function syncReaderControls(){
+  $('tapLayer').classList.toggle('speech-gesture-enabled',isSpeechActive());
   $('readerControls').hidden=!state.controls;$('controlsBackdrop').hidden=!state.controls;
   $('playBtn').textContent=state.tts.waitingForStart?'↻ 重試朗讀':state.tts.status==='playing'?'Ⅱ 暫停':state.tts.status==='paused'?'▶ 繼續':'▶ 朗讀';
   $('headphoneBtn').textContent=state.tts.waitingForStart?'⏳':state.tts.status==='playing'?'⏸':'🎧';
@@ -229,7 +245,7 @@ async function openBook(bookId){
   state.busy=true;
   const previous=state.book;
   try {
-    stopSpeech(false);closeSheet();
+    stopSpeech(false);stopChapterAudio(true);closeSheet();
     const book=await getBook(bookId);
     if(!book){notify('找不到小說，請先回書架重新整理');return;}
     state.book=book;state.chapter=null;state.pages=[];state.paragraphs=[];state.pageIndex=0;state.readingOffset=0;state.controls=false;state.activeParagraph=-1;
@@ -302,6 +318,7 @@ function displayFollowHighlight(){const visible=state.pages[state.pageIndex];if(
   }
 }
 async function returnToShelf(){
+  stopChapterAudio(true);
   const t=state.tts;
   const bookmark=t.status!=='idle'?{chapter:t.chapter,offset:t.offset}:{chapter:state.chapterIndex,offset:state.readingOffset};
   stopSpeech(false);
@@ -338,7 +355,8 @@ function stopSpeech(save=true){
     savePosition(state.book.id,t.chapter,t.offset).catch(console.error);
     if(t.chapter===state.chapterIndex)state.readingOffset=t.offset;
   }
-  t.token++;t.status='idle';t.chunk=null;t.waitingForStart=false;
+  t.token++;t.status='idle';t.chunk=null;t.waitingForStart=false;t.needsRestart=false;
+  $('tapLayer').classList.remove('speech-gesture-enabled');
   if(synthesis)try{synthesis.cancel();}catch{}
   state.activeParagraph=-1;
   if(!state.book)return;
@@ -382,6 +400,7 @@ function testIPhoneVoice(){
   try{
     if(synthesis.speaking||synthesis.pending||synthesis.paused)synthesis.cancel();
     // Must speak directly in the button tap, without await / setTimeout, on iOS WebKit.
+    configureAudioSession();
     const u=makeUtterance('你好，這是麗華小說的中文語音測試。');
     let started=false;
     const check=setTimeout(()=>{if(!started)notify('語音尚未開始：請調高媒體音量，確認 iPhone 中文語音可用，然後再點一次試聽。',8500);},9000);
@@ -399,13 +418,16 @@ function startSpeech(){
     stopSpeech(false);
   }else if(state.tts.status==='playing'){pauseSpeech();return;}
   if(state.tts.status==='paused'){
-    // When the current page has changed since pause, start from the displayed page.
-    if(state.tts.chapter===state.chapterIndex && pageOfOffset(state.tts.offset)===state.pageIndex){resumeSpeech();return;}
-    stopSpeech(false);state.readingOffset=state.pages[state.pageIndex]?.start||0;
+    // A swipe changed the target while paused: old utterance was cancelled.
+    if(state.tts.needsRestart){stopSpeech(false);}
+    else if(state.tts.chapter===state.chapterIndex && pageOfOffset(state.tts.offset)===state.pageIndex){resumeSpeech();return;}
+    else{stopSpeech(false);state.readingOffset=state.pages[state.pageIndex]?.start||0;}
   }
   refreshVoices();
+  configureAudioSession();
+  stopChapterAudio(false);
   try{if(synthesis.speaking||synthesis.pending||synthesis.paused)synthesis.cancel();}catch{}
-  state.tts.token++;state.tts.status='playing';state.tts.waitingForStart=true;state.tts.chapter=state.chapterIndex;state.tts.offset=state.readingOffset;
+  state.tts.token++;state.tts.status='playing';state.tts.waitingForStart=true;state.tts.chapter=state.chapterIndex;state.tts.offset=state.readingOffset;state.tts.needsRestart=false;
   syncReaderControls();
   // Critical iPhone fix: avoid awaiting IndexedDB before first speechSynthesis.speak().
   // The current chapter is already in memory from loadChapter().
@@ -492,6 +514,115 @@ function speakNext(token,loadedChapter=null,quickStart=false){
   try{synthesis.speak(utterance);}catch(e){clearTimeout(startupWatchdog);console.error(e);stopSpeech();notify('無法開始朗讀，請確認 iPhone 語音設定');}
 }
 
+
+// --- Swipe while narrating: down goes to later PARAGRAPH, up goes to earlier.
+// The button tap zones remain unchanged for short taps.
+function locateParagraphIndex(paragraphs,offset){
+  if(!paragraphs.length)return -1;
+  let idx=paragraphs.findIndex(p=>offset>=p.start&&offset<p.end);
+  if(idx>=0)return idx;
+  for(let i=0;i<paragraphs.length;i++)if(paragraphs[i].start>offset)return Math.max(0,i-1);
+  return paragraphs.length-1;
+}
+function seekParagraph(direction){
+  if(!state.book||!state.chapter||!state.pages.length||!isSpeechActive())return;
+  if(state.tts.chapter!==state.chapterIndex){
+    notify('目前朗讀章節與顯示章節不同，請先回到正在朗讀的章節',4800);
+    return;
+  }
+  const current=locateParagraphIndex(state.paragraphs,state.tts.offset);
+  const targetIndex=current+direction;
+  if(targetIndex<0){notify('已經是本章第一段');return;}
+  if(targetIndex>=state.paragraphs.length){notify('已經是本章最後一段');return;}
+  const offset=state.paragraphs[targetIndex].start;
+  const wasPlaying=state.tts.status==='playing';
+  stopSpeech(false); // Cancel the old utterance and invalidate all queued callbacks.
+  state.readingOffset=offset;state.speechOffset=offset;
+  state.activeParagraph=targetIndex;
+  state.pageIndex=pageOfOffset(offset);
+  renderPage();displayFollowHighlight();
+  // Persist the new location immediately, not the old utterance's boundary.
+  savePosition(state.book.id,state.chapterIndex,offset).catch(console.error);
+  if(wasPlaying){
+    // Executed directly in touchend: needed for iOS user-gesture speech permission.
+    startSpeech();
+  }else{
+    state.tts.status='paused';
+    state.tts.chapter=state.chapterIndex;
+    state.tts.offset=offset;
+    state.tts.needsRestart=true;
+    syncReaderControls();
+    notify(`${direction>0?'下一段':'上一段'}已定位，按耳機繼續朗讀`);
+  }
+}
+function wireSpeechGestures(){
+  const zone=$('tapLayer');
+  zone.addEventListener('touchstart',event=>{
+    speechSwipe.tracking=false;
+    if(!isSpeechActive()||!state.book||event.touches.length!==1||!$('overlay').hidden||state.controls)return;
+    const t=event.touches[0];
+    speechSwipe.startX=t.clientX;speechSwipe.startY=t.clientY;
+    speechSwipe.startAt=Date.now();speechSwipe.tracking=true;
+  },{passive:true});
+  zone.addEventListener('touchend',event=>{
+    if(!speechSwipe.tracking||event.changedTouches.length!==1)return;
+    speechSwipe.tracking=false;
+    const t=event.changedTouches[0];
+    const dx=t.clientX-speechSwipe.startX,dy=t.clientY-speechSwipe.startY;
+    const duration=Date.now()-speechSwipe.startAt;
+    if(duration>1600||Math.abs(dy)<55||Math.abs(dy)<1.35*Math.abs(dx))return;
+    // Consume the synthesized tap so a swipe never flips a page or opens controls.
+    lastSwipeAt=Date.now();
+    if(event.cancelable)event.preventDefault();
+    seekParagraph(dy>0?1:-1);
+  },{passive:false});
+  zone.addEventListener('touchcancel',()=>{speechSwipe.tracking=false;},{passive:true});
+  zone.addEventListener('click',event=>{
+    if(Date.now()-lastSwipeAt<550){event.preventDefault();event.stopImmediatePropagation();}
+  },true);
+}
+// --- Optional audio-file experiment. It does not convert text to audio.
+function stopChapterAudio(hide=false){
+  const audio=$('backgroundAudio');
+  if(!audio)return;
+  audio.pause();
+  if(hide){
+    audio.removeAttribute('src');audio.load();
+    if(chapterAudioUrl){URL.revokeObjectURL(chapterAudioUrl);chapterAudioUrl=null;}
+    $('audioDock').hidden=true;
+    $('chapterAudioPicker').value='';
+  }
+}
+function setMediaSessionForAudio(){
+  if(!('mediaSession' in navigator))return;
+  try{
+    navigator.mediaSession.metadata=new MediaMetadata({
+      title:state.chapter?.title||'章節音檔',artist:state.book?.title||'麗華小說',album:'麗華小說 · 音檔模式'
+    });
+    navigator.mediaSession.setActionHandler('play',()=>$('backgroundAudio').play().catch(console.warn));
+    navigator.mediaSession.setActionHandler('pause',()=>$('backgroundAudio').pause());
+    navigator.mediaSession.setActionHandler('seekbackward',details=>{
+      const audio=$('backgroundAudio');audio.currentTime=Math.max(0,audio.currentTime-(details.seekOffset||15));
+    });
+    navigator.mediaSession.setActionHandler('seekforward',details=>{
+      const audio=$('backgroundAudio');audio.currentTime=Math.min(audio.duration||Infinity,audio.currentTime+(details.seekOffset||15));
+    });
+  }catch(e){console.warn('Media Session unavailable',e);}
+}
+function loadChapterAudio(file){
+  if(!file)return;
+  const supported=/\.(mp3|m4a|aac|wav|ogg|mp4)$/i.test(file.name)||file.type.startsWith('audio/');
+  if(!supported){notify('請選擇 MP3、M4A 或其他 iPhone 支援的音訊檔',6500);return;}
+  stopSpeech(false);stopChapterAudio(true);
+  configureAudioSession();
+  chapterAudioUrl=URL.createObjectURL(file);
+  const audio=$('backgroundAudio');audio.src=chapterAudioUrl;
+  $('audioDock').hidden=false;
+  $('audioFileName').textContent=file.name;
+  setMediaSessionForAudio();
+  closeSheet();setControls(false);
+  notify('音檔已載入，按播放後可以測試鎖螢幕。此功能不會自動將小說文字配音。',6500);
+}
 function showToc(){if(!state.book)return;
   showSheet('章節目錄',async root=>{
     const bookId=state.book.id;
@@ -510,6 +641,7 @@ function showSettings(){showSheet('閱讀設定',root=>{
   makeSettingRow(root,'跟隨朗讀','朗讀中鎖定手動翻頁，自動依播放進度翻頁',makeCheckbox(settings.follow,v=>{settings.follow=v;persistSettings();syncReaderControls();}));
   const fontValue=textEl('span','',settings.fontSize+' px');const f=makeRange(15,34,1,settings.fontSize,v=>{settings.fontSize=v;fontValue.textContent=v+' px';persistSettings();repaginate(state.readingOffset);});const fwrap=document.createElement('div');fwrap.style.display='flex';fwrap.style.alignItems='center';fwrap.append(f,fontValue);makeSettingRow(root,'字體大小','即時調整',fwrap);
   const spaceValue=textEl('span','',settings.lineSpacing.toFixed(2)+'×');const s=makeRange(.8,1.8,.05,settings.lineSpacing,v=>{settings.lineSpacing=v;spaceValue.textContent=v.toFixed(2)+'×';persistSettings();repaginate(state.readingOffset);syncReaderControls();});const swrap=document.createElement('div');swrap.style.display='flex';swrap.style.alignItems='center';swrap.append(s,spaceValue);makeSettingRow(root,'行距／列距','即時調整',swrap);
+  root.append(textEl('p','inline-hint','朗讀中：在正文由上往下滑跳到下一段；由下往上滑回上一段。短點仍維持原本左／中／右分區操作。'));
   const rate=makeSelect([['0.75','0.75×'],['0.85','0.85×'],['1','1.0×'],['1.15','1.15×'],['1.3','1.3×'],['1.5','1.5×'],['1.75','1.75×'],['2','2×']],String(settings.rate),v=>{settings.rate=Number(v);persistSettings();notify('語速會從下一段朗讀開始套用');});makeSettingRow(root,'朗讀語速','',rate);
   refreshVoices();
   const voiceInfo=textEl('p','inline-hint','');
@@ -542,7 +674,13 @@ function showSettings(){showSheet('閱讀設定',root=>{
   sheetButton(root,'▶ 試聽選擇的聲音',()=>{stopSpeech();testIPhoneVoice();});
   sheetButton(root,'如何在 iPhone 加入其他中文語音',()=>showVoiceInstructions());
   sheetButton(root,'⏱ 睡眠定時',()=>showSleepOptions());
-  root.append(textEl('p','notice','背景播放限制：iPhone 網頁語音 speechSynthesis 在鎖定螢幕或切換 App 後可能停止。此版不能保證背景朗讀；若要穩定播放需改用預先製作的音訊檔，不能直接把系統語音輸出存成 MP3。'));
+  makeSettingRow(root,'背景語音實驗（Safari）','嘗試 AudioSession playback 模式；鎖螢幕是否有效需實機測試，不保證',makeCheckbox(settings.experimentalAudioSession,value=>{
+    settings.experimentalAudioSession=value;persistSettings();
+    if(value){const okay=configureAudioSession();notify(okay?'已啟用播放音訊工作階段實驗':'此 Safari 不支援 AudioSession，將維持原本語音模式',5000);}
+  }));
+  sheetButton(root,'🎵 測試背景音檔（MP3／M4A）',()=>{$('chapterAudioPicker').click();});
+  root.append(textEl('p','inline-hint','音檔測試可使用已製作好的有聲書音檔。iPhone 可能支援鎖螢幕播放；但這不會把 TXT／EPUB 自動轉成 MP3，也沒有和文字逐句同步。'));
+  root.append(textEl('p','notice','iPhone PWA 的內建文字轉語音依賴 Web Speech API；即使啟用背景實驗，切換 App 或鎖定螢幕後仍可能中斷。'));
 });}
 function showVoiceInstructions(){showSheet('增加 iPhone 中文聲音',root=>{
   root.append(textEl('p','notice','iPhone 設定 → 輔助使用 → 閱讀與朗讀 → 聲音，選擇中文（臺灣／中國大陸／香港），可下載可用音色。不同 iOS 版本的名稱可能不同。'));
@@ -585,6 +723,18 @@ function wireEvents(){
     closeSheet();await refreshShelf();notify(`已還原 ${n} 本小說`);}catch(err){notify('備份還原失敗：'+err.message);}finally{$('backupPicker').value='';}};
   $('backToShelf').onclick=returnToShelf;$('readerBookTitle').onclick=showFullChapterTitle;
   $('headphoneBtn').onclick=startSpeech;$('tocBtn').onclick=showToc;
+  wireSpeechGestures();
+  $('chapterAudioPicker').onchange=e=>loadChapterAudio(e.target.files?.[0]);
+  $('closeAudioDock').onclick=()=>stopChapterAudio(true);
+  const chapterAudio=$('backgroundAudio');
+  chapterAudio.addEventListener('play',()=>{
+    configureAudioSession();
+    if('mediaSession' in navigator)try{navigator.mediaSession.playbackState='playing';}catch{}
+  });
+  chapterAudio.addEventListener('pause',()=>{
+    if('mediaSession' in navigator)try{navigator.mediaSession.playbackState='paused';}catch{}
+  });
+  chapterAudio.addEventListener('error',()=>{if(chapterAudio.src)notify('此音檔無法播放，請換成 iPhone 支援的 MP3 或 M4A',6000);});
   $('tapCenter').onclick=()=>setControls(!state.controls);
   $('tapLeft').onclick=()=>goPage(settings.direction==='vertical'?1:-1);
   $('tapRight').onclick=()=>goPage(settings.direction==='vertical'?-1:1);
@@ -626,7 +776,7 @@ async function initialize(){
   try{await openLibrary();await refreshShelf();}
   catch(e){console.error(e);notify('無法存取本機書架，請確認 Safari 非私密瀏覽模式',6500);}
   if('serviceWorker' in navigator && /^https?:/.test(location.protocol)){
-    navigator.serviceWorker.register('./sw.js?v=104', {updateViaCache:'none'}).catch(e=>console.warn('Offline setup failed',e));
+    navigator.serviceWorker.register('./sw.js?v=105', {updateViaCache:'none'}).catch(e=>console.warn('Offline setup failed',e));
   }
 }
 initialize();
