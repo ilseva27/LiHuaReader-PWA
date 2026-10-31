@@ -3,8 +3,14 @@ const DB_NAME = 'LiHuaReaderPWA';
 const DB_VERSION = 1;
 let databasePromise;
 
-export function openLibrary() {
-  if (databasePromise) return databasePromise;
+export async function openLibrary() {
+  if(databasePromise){
+    try{
+      const db=await databasePromise;
+      db.transaction('books','readonly'); // iOS may close IndexedDB connections in the background.
+      return db;
+    }catch(e){databasePromise=null;}
+  }
   databasePromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
@@ -13,8 +19,13 @@ export function openLibrary() {
       if (!db.objectStoreNames.contains('chapters')) db.createObjectStore('chapters', { keyPath:['bookId','index'] });
       if (!db.objectStoreNames.contains('positions')) db.createObjectStore('positions', { keyPath:'bookId' });
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db=request.result;
+      db.onclose=()=>{databasePromise=null;};
+      db.onversionchange=()=>{db.close();databasePromise=null;};
+      resolve(db);
+    };
+    request.onerror = () => {databasePromise=null;reject(request.error);};
   });
   return databasePromise;
 }
@@ -44,6 +55,19 @@ export async function removeBook(bookId){
   });
 }
 export async function storeParsedBook(parsed) {
+  if(!Array.isArray(parsed.chapters)||!parsed.chapters.length)throw new Error('小說沒有可讀取的章節');
+  // Imported a book twice? Reuse the original instead of inserting a new random ID.
+  // Check the beginning and end chapters, not merely the filename (different books may share titles).
+  const existingBooks=await listBooks();
+  const firstNew=parsed.chapters[0].text||'';
+  const lastNew=parsed.chapters.at(-1).text||'';
+  for(const old of existingBooks){
+    if(old.title!==(parsed.title||'未命名小說')||old.format!==parsed.format||old.chapterCount!==parsed.chapters.length)continue;
+    const first=await getChapter(old.id,0);
+    if(first?.text!==firstNew)continue;
+    const last=await getChapter(old.id,old.chapterCount-1);
+    if(last?.text===lastNew)return {...old,alreadyExists:true};
+  }
   const id=globalThis.crypto?.randomUUID?.()||`book-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const meta={id,title:parsed.title||'未命名小說',author:parsed.author||'',format:parsed.format,cover:parsed.cover||'',chapterCount:parsed.chapters.length,importedAt:Date.now(),lastOpened:0};
   await transaction(['books','chapters','positions'],'readwrite',tx=>{

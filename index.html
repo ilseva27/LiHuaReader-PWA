@@ -11,11 +11,12 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <link rel="icon" type="image/png" href="./icons/icon-192.png">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=103">
   <title>麗華小說</title>
 </head>
 <body>
   <div id="app" class="app theme-paper">
+    <div id="appError" class="app-error" hidden></div>
     <section id="shelfView" class="view shelf-view">
       <header class="shelf-head">
         <div><div class="overline">LI HUA READER</div><h1>麗華小說</h1><p class="subtitle">把每一段故事，收藏在心裡。</p></div>
@@ -25,7 +26,7 @@
       <div class="shelf-section-title"><strong>我的書架</strong><small id="bookCount">0 本小說</small></div>
       <div id="shelfGrid" class="shelf-grid"></div>
       <div id="shelfEmpty" class="shelf-empty" hidden><div class="empty-cover">書</div><h2>你的書架還是空的</h2><p>選擇 iPhone「檔案」中的 TXT 或 EPUB，即可開始閱讀。</p><button id="sampleBtn" class="soft-button">先閱讀示範小說</button></div>
-      <footer class="shelf-footer">小說檔案只保存在此裝置的瀏覽器中。重要書籍與進度請定期備份。</footer>
+      <footer class="shelf-footer">小說檔案只保存在此裝置的瀏覽器中。重要書籍與進度請定期備份。 <span id="appVersion">v1.0.3</span></footer>
     </section>
 
     <section id="readerView" class="view reader-view" hidden>
@@ -50,7 +51,7 @@
     <input id="filePicker" type="file" accept=".txt,.epub,text/plain,application/epub+zip" multiple hidden>
     <input id="backupPicker" type="file" accept=".json,application/json" hidden>
   </div>
-  <script src="./vendor/jszip.min.js"></script>
-  <script type="module" src="./app.js"></script>
+  <script src="./vendor/jszip.min.js?v=103"></script>
+  <script type="module" src="./app.js?v=103"></script>
 </body>
 </html>

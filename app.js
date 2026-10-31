@@ -1,12 +1,30 @@
-import {openLibrary,listBooks,getBook,getChapter,getPosition,savePosition,updateBookOpen,removeBook,storeParsedBook,parseBookFile,exportLibrary,restoreLibrary} from './library.js';
-import {convertChinese} from './converter.js';
+import {openLibrary,listBooks,getBook,getChapter,getPosition,savePosition,updateBookOpen,removeBook,storeParsedBook,parseBookFile,exportLibrary,restoreLibrary} from './library.js?v=103';
+import {convertChinese} from './converter.js?v=103';
 
+const APP_VERSION='1.0.3';
 const $ = id => document.getElementById(id);
 const defaults={direction:'horizontal',script:'original',fontSize:20,lineSpacing:1.25,bold:false,theme:'paper',follow:true,rate:1,voiceURI:'',voiceName:''};
-const settings={...defaults,...JSON.parse(localStorage.getItem('lihuaSettings')||'{}')};
-const state={book:null,chapter:null,chapterIndex:0,pages:[],pageIndex:0,paragraphs:[],readingOffset:0,speechOffset:0,controls:false,busy:false,loadToken:0,activeParagraph:-1,voices:[],tts:{status:'idle',token:0,chapter:0,offset:0,chunk:null,sleepDeadline:0,waitingForStart:false}};
+function readSettings(){
+  try {return {...defaults,...JSON.parse(localStorage.getItem('lihuaSettings')||'{}')};}
+  catch(e){console.warn('閱讀設定格式損壞，使用預設值',e);return {...defaults};}
+}
+const settings=readSettings();
+const state={book:null,chapter:null,chapterIndex:0,pages:[],pageIndex:0,paragraphs:[],readingOffset:0,speechOffset:0,controls:false,busy:false,loadToken:0,paginationToken:0,activeParagraph:-1,voices:[],tts:{status:'idle',token:0,chapter:0,offset:0,chunk:null,sleepDeadline:0,waitingForStart:false}};
 const synthesis='speechSynthesis' in window ? window.speechSynthesis:null;
 let toastTimeout,resizeTimer,saveTimer;
+window.addEventListener('error',event=>{
+  console.error('麗華小說執行錯誤',event.error||event.message);
+  const output=$('appError');if(!output)return;
+  output.textContent=`程式錯誤（v${APP_VERSION}）：${event.message||'未知錯誤'}。可截圖提供給我；請勿清除網站資料。`;
+  output.hidden=false;
+});
+window.addEventListener('unhandledrejection',event=>{
+  console.error('麗華小說非同步錯誤',event.reason);
+  const output=$('appError');if(!output)return;
+  const reason=event.reason?.message||String(event.reason||'未知錯誤');
+  output.textContent=`程式錯誤（v${APP_VERSION}）：${reason}。請勿清除網站資料。`;
+  output.hidden=false;
+});
 
 function notify(message,delay=3300){const el=$('toast');el.textContent=message;el.classList.add('show');clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>el.classList.remove('show'),delay);}
 function persistSettings(){localStorage.setItem('lihuaSettings',JSON.stringify(settings));}
@@ -40,7 +58,15 @@ function makeSelect(options,value,change){const select=document.createElement('s
 function makeCheckbox(value,change){const input=document.createElement('input');input.type='checkbox';input.checked=value;input.onchange=()=>change(input.checked);return input;}
 function makeRange(min,max,step,value,change){const input=document.createElement('input');input.type='range';input.min=min;input.max=max;input.step=step;input.value=value;input.oninput=()=>change(Number(input.value));return input;}
 async function refreshShelf(){
-  const books=await listBooks();const grid=$('shelfGrid');grid.replaceChildren();$('shelfEmpty').hidden=books.length!==0;$('bookCount').textContent=`${books.length} 本小說`;
+  let books;
+  try {books=await listBooks();}
+  catch(e){
+    console.error('書架讀取失敗',e);
+    $('shelfEmpty').hidden=true;
+    $('bookCount').textContent='書架讀取失敗（請勿重複匯入）';
+    notify('書架讀取異常，原本的小說可能仍在本機，請勿急著重新匯入：'+(e.message||e),8500);
+    throw e;
+  }const grid=$('shelfGrid');grid.replaceChildren();$('shelfEmpty').hidden=books.length!==0;$('bookCount').textContent=`${books.length} 本小說`;
   for(const book of books){
     const card=document.createElement('article');card.className='book-card';
     const tile=document.createElement('button');tile.className='cover-tile';tile.setAttribute('aria-label',`閱讀 ${book.title}`);tile.onclick=()=>openBook(book.id);
@@ -59,13 +85,14 @@ function showBookActions(book){showSheet(book.title,root=>{
 async function importFiles(files){
   if(!files?.length)return;
   $('importBtn').disabled=true;$('importShelfBtn').disabled=true;
-  let done=0;let errors=[];
+  let done=0,skipped=0;let errors=[];
   for(const file of files){
     notify(`匯入中：${file.name}`,20000);
     try{
       if(file.size>90*1024*1024)throw Error('檔案超過 90 MB，請使用較小的檔案');
       const parsed=await parseBookFile(file);
-      await storeParsedBook(parsed);done++;
+      const saved=await storeParsedBook(parsed);
+      if(saved.alreadyExists)skipped++;else done++;
     }catch(e){console.error(e);errors.push(`${file.name||'未命名檔案'}：${friendlyImportError(e)}`);}
   }
   $('importBtn').disabled=false;$('importShelfBtn').disabled=false;
@@ -76,8 +103,8 @@ async function importFiles(files){
       for(const error of errors)root.append(textEl('p','notice',error));
       root.append(textEl('p','inline-hint','如果需要協助，請把上方錯誤文字截圖給我；不需要上傳私人小說內容。'));
     });
-    notify(`匯入 ${done} 本成功，${errors.length} 本失敗`,6000);
-  }else notify(`已匯入 ${done} 本小說`);
+    notify(`新增 ${done} 本，已有 ${skipped} 本，失敗 ${errors.length} 本`,6000);
+  }else notify(skipped?`新增 ${done} 本，略過 ${skipped} 本完全相同的小說`:`已匯入 ${done} 本小說`);
   $('filePicker').value='';
 }
 function friendlyImportError(e){
@@ -119,11 +146,13 @@ function measureFit(partText,empty,continued){
   while(lo<hi){const mid=Math.floor((lo+hi+1)/2);p.textContent=partText.slice(0,mid);if(measurementOverflows())hi=mid-1;else lo=mid;}
   m.removeChild(p);return lo;
 }
-function makePages(){
-  const rect=readerDimensions();const m=$('measure');m.style.width=rect.width+'px';m.style.height=rect.height+'px';
+async function makePages(paragraphs, token){
+  const rect=readerDimensions();const m=$('measure');
+  if(rect.width<90||rect.height<100)throw new Error('閱讀畫面大小異常，請重新開啟小說');
+  m.style.width=rect.width+'px';m.style.height=rect.height+'px';
   updateReadStyles();
-  const pages=[];const paragraphs=state.paragraphs;
-  let pi=0,ci=0,safety=0;
+  const pages=[];
+  let pi=0,ci=0,safety=0,tinyPages=0;
   while(pi<paragraphs.length && safety++<20000){
     const items=[];m.replaceChildren();let iterations=0;
     while(pi<paragraphs.length && iterations++<250){
@@ -140,14 +169,23 @@ function makePages(){
         ci+=fit;break;
       }else if(items.length){break;}
       else {
-        const count=Math.min(tail.length,1);items.push({text:tail.slice(0,count),pIndex:pi,start:para.start+ci,end:para.start+ci+count,continued});ci+=count;
+        const count=Math.min(tail.length,1);
+        items.push({text:tail.slice(0,count),pIndex:pi,start:para.start+ci,end:para.start+ci+count,continued});ci+=count;
         if(ci>=para.text.length){pi++;ci=0;}break;
       }
     }
-    if(items.length)pages.push({items,start:items[0].start,end:items[items.length-1].end});
-    else break;
+    if(!items.length)break;
+    pages.push({items,start:items[0].start,end:items[items.length-1].end});
+    tinyPages=(pages.at(-1).end-pages.at(-1).start)<3?tinyPages+1:0;
+    if(tinyPages>10)throw new Error('分頁量測異常；請調整字體大小或旋轉畫面後重試');
+    // Yield to touch input and layout so the reader is not unresponsive for long EPUB chapters.
+    if(pages.length%12===0){
+      await new Promise(resolve=>setTimeout(resolve,0));
+      if(token!==state.paginationToken)return null;
+    }
   }
   m.replaceChildren();
+  if(safety>=20000)throw new Error('分頁超出合理範圍，請重新開啟小說');
   return pages.length?pages:[{items:[],start:0,end:0}];
 }
 function pageOfOffset(offset){
@@ -175,34 +213,67 @@ async function commitPosition(){clearTimeout(saveTimer);if(!state.book)return;co
 }
 async function repaginate(targetOffset=state.readingOffset){
   if(!state.chapter)return;
+  const token=++state.paginationToken;
   if(settings.follow && state.tts.status!=='idle' && state.tts.chapter===state.chapterIndex)targetOffset=state.tts.offset;
-  const chapterText=contentForChapter(state.chapter);state.paragraphs=splitParagraphs(chapterText);
-  state.pages=makePages();state.pageIndex=pageOfOffset(Math.max(0,targetOffset));renderPage();
+  const chapterText=contentForChapter(state.chapter);
+  const paragraphs=splitParagraphs(chapterText);
+  // User may change font or direction while pagination is running. Apply only the newest result.
+  const pages=await makePages(paragraphs,token);
+  if(!pages||token!==state.paginationToken)return;
+  state.paragraphs=paragraphs;
+  state.pages=pages;state.pageIndex=pageOfOffset(Math.max(0,targetOffset));renderPage();
   syncReaderControls();
 }
 async function openBook(bookId){
-  stopSpeech(false);closeSheet();
-  const book=await getBook(bookId);if(!book){notify('找不到小說');return;}
-  state.book=book;state.chapter=null;state.pageIndex=0;state.controls=false;state.activeParagraph=-1;
-  $('shelfView').hidden=true;$('readerView').hidden=false;applyTheme();syncReaderControls();
-  await updateBookOpen(bookId);
-  const progress=await getPosition(bookId);
-  await loadChapter(progress.chapter||0,Math.max(0,progress.offset||0),{save:false,keepSpeech:true});
+  if(state.busy)return;
+  state.busy=true;
+  const previous=state.book;
+  try {
+    stopSpeech(false);closeSheet();
+    const book=await getBook(bookId);
+    if(!book){notify('找不到小說，請先回書架重新整理');return;}
+    state.book=book;state.chapter=null;state.pages=[];state.paragraphs=[];state.pageIndex=0;state.readingOffset=0;state.controls=false;state.activeParagraph=-1;
+    $('shelfView').hidden=true;$('readerView').hidden=false;applyTheme();syncReaderControls();
+    $('pageBody').replaceChildren(textEl('p','loading-placeholder','正在載入小說…'));
+    // Keep this UI responsive even on slower iPhones.
+    await new Promise(resolve=>requestAnimationFrame(resolve));
+    await updateBookOpen(bookId);
+    const progress=await getPosition(bookId);
+    state.busy=false;
+    await loadChapter(progress.chapter||0,Math.max(0,progress.offset||0),{save:false,keepSpeech:true});
+  }catch(e){
+    console.error('開啟小說失敗',e);state.busy=false;state.book=previous;
+    $('readerView').hidden=true;$('shelfView').hidden=false;
+    notify('開啟小說失敗：'+(e.message||e)+'。原書籍未刪除。',9000);
+    try{await refreshShelf();}catch{}
+  }finally{state.busy=false;}
 }
 async function loadChapter(index,offset=0,{save=true,keepSpeech=false}={}){
   if(!state.book)return;
   if(!keepSpeech)stopSpeech();
   index=Math.max(0,Math.min(state.book.chapterCount-1,index));
-  const token=++state.loadToken;state.busy=true;
-  const chapter=await getChapter(state.book.id,index);if(token!==state.loadToken)return;
-  if(!chapter){notify('找不到章節內容');state.busy=false;return;}
-  state.chapter=chapter;state.chapterIndex=index;state.readingOffset=Math.min(chapter.text.length,Math.max(0,offset));
-  state.speechOffset=state.readingOffset;state.activeParagraph=-1;
-  await new Promise(resolve=>requestAnimationFrame(resolve));
-  if(token!==state.loadToken)return;
-  await repaginate(state.readingOffset);
-  state.busy=false;
-  if(save)scheduleSavePosition(index,state.readingOffset);
+  const token=++state.loadToken;
+  state.busy=true;
+  try {
+    const chapter=await getChapter(state.book.id,index);
+    if(token!==state.loadToken)return;
+    if(!chapter)throw new Error('找不到第 '+(index+1)+' 章的內容');
+    state.chapter=chapter;state.chapterIndex=index;
+    state.readingOffset=Math.min(chapter.text.length,Math.max(0,offset));
+    state.speechOffset=state.readingOffset;state.activeParagraph=-1;
+    await new Promise(resolve=>requestAnimationFrame(resolve));
+    if(token!==state.loadToken)return;
+    await repaginate(state.readingOffset);
+    if(save)scheduleSavePosition(index,state.readingOffset);
+  }catch(e){
+    console.error('載入章節失敗',e);
+    notify('載入章節失敗：'+(e.message||e),9000);
+    if(!state.pages.length){
+      $('pageBody').replaceChildren(textEl('p','loading-placeholder','本章載入失敗。可返回書架，原小說資料不會被刪除。'));
+    }
+  }finally{
+    if(token===state.loadToken)state.busy=false;
+  }
 }
 function goPage(step,{auto=false}={}){
   if(!state.book||state.busy)return;
@@ -490,8 +561,14 @@ function wireEvents(){
   $('closeSheet').onclick=closeSheet;
   $('overlay').onclick=e=>{if(e.target===$('overlay'))closeSheet();};
   window.addEventListener('resize',()=>{if(!state.book)return;clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>repaginate(state.readingOffset),160);});
-  document.addEventListener('visibilitychange',()=>{if(document.hidden)commitPosition().catch(console.error);});
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden)commitPosition().catch(console.error);
+    else if(!state.book)refreshShelf().catch(console.error);
+  });
   window.addEventListener('pagehide',()=>{commitPosition().catch(console.error);});
+  window.addEventListener('pageshow',()=>{
+    if(!state.book)refreshShelf().catch(console.error);
+  });
   window.addEventListener('keydown',e=>{if($('overlay').hidden===false)return;if(!state.book)return;
     if(e.key==='Escape')setControls(false);
     if(e.key==='ArrowLeft')goPage(settings.direction==='vertical'?1:-1);
@@ -500,11 +577,13 @@ function wireEvents(){
   });
   if(synthesis){refreshVoices();synthesis.addEventListener?.('voiceschanged',refreshVoices);}
 }
-async function initialize(){applyTheme();wireEvents();syncReaderControls();
+async function initialize(){
+  applyTheme();wireEvents();syncReaderControls();
+  const versionLabel=$('appVersion');if(versionLabel)versionLabel.textContent=`v${APP_VERSION}`;
   try{await openLibrary();await refreshShelf();}
   catch(e){console.error(e);notify('無法存取本機書架，請確認 Safari 非私密瀏覽模式',6500);}
   if('serviceWorker' in navigator && /^https?:/.test(location.protocol)){
-    navigator.serviceWorker.register('./sw.js').catch(e=>console.warn('Offline setup failed',e));
+    navigator.serviceWorker.register('./sw.js?v=103', {updateViaCache:'none'}).catch(e=>console.warn('Offline setup failed',e));
   }
 }
 initialize();
