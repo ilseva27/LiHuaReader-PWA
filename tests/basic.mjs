@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {convertChinese} from '../converter.js';
+import {chaptersFromTxt} from '../library.js';
+const source='他打开书本，准备阅读这个精彩的故事。头发发展后面。';
+assert.match(convertChinese(source,'traditional'),/打開書本，準備閱讀/);
+assert.match(convertChinese('頭髮發展','simplified'),/头发发展/);
+assert.equal(convertChinese(source,'original'),source);
+const chapters=chaptersFromTxt('第一章 天亮了\r\n這是第一段。第一段還有一句。\r\n這是第二段。\r\n第二章 雨停了\r\n第三段。','範例');
+assert.equal(chapters.length,2);
+assert.match(chapters[0].text,/第一段還有一句。\n這是第二段/);
+assert.equal(chapters[1].title,'第二章 雨停了');
+console.log('PASS: 中文轉換 + TXT 章節及段落解析');

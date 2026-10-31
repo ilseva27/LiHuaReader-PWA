@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f8f3ec">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="麗華小說">
+  <meta name="description" content="麗華小說：TXT、EPUB、直橫排、離線書架與 iPhone 語音朗讀。">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./styles.css">
+  <title>麗華小說</title>
+</head>
+<body>
+  <div id="app" class="app theme-paper">
+    <section id="shelfView" class="view shelf-view">
+      <header class="shelf-head">
+        <div><div class="overline">LI HUA READER</div><h1>麗華小說</h1><p class="subtitle">把每一段故事，收藏在心裡。</p></div>
+        <button class="round-icon import-top" id="importBtn" aria-label="匯入小說" title="匯入小說">＋</button>
+      </header>
+      <div class="shelf-actions"><button id="importShelfBtn" class="primary-action">＋ 匯入 TXT / EPUB</button><button id="backupBtn" class="soft-button">備份與還原</button></div>
+      <div class="shelf-section-title"><strong>我的書架</strong><small id="bookCount">0 本小說</small></div>
+      <div id="shelfGrid" class="shelf-grid"></div>
+      <div id="shelfEmpty" class="shelf-empty" hidden><div class="empty-cover">書</div><h2>你的書架還是空的</h2><p>選擇 iPhone「檔案」中的 TXT 或 EPUB，即可開始閱讀。</p><button id="sampleBtn" class="soft-button">先閱讀示範小說</button></div>
+      <footer class="shelf-footer">小說檔案只保存在此裝置的瀏覽器中。重要書籍與進度請定期備份。</footer>
+    </section>
+
+    <section id="readerView" class="view reader-view" hidden>
+      <header class="reader-head"><button id="backToShelf" class="icon-button" aria-label="返回書架">‹</button><button id="readerBookTitle" class="reader-book-title">麗華小說</button><div class="header-tools"><button id="headphoneBtn" class="icon-button" aria-label="開始朗讀" title="開始／暫停朗讀">🎧</button><button id="tocBtn" class="icon-button" aria-label="章節目錄" title="章節目錄">☷</button></div></header>
+      <div id="readSpace" class="read-space">
+        <div id="pageViewport" class="page-viewport" aria-live="off"><div id="pageBody" class="page-body"></div></div>
+        <div id="tapLayer" class="tap-layer"><button id="tapLeft" class="tap-zone" aria-label="翻頁左側"></button><button id="tapCenter" class="tap-zone middle-zone" aria-label="開啟閱讀選單"></button><button id="tapRight" class="tap-zone" aria-label="翻頁右側"></button></div>
+      </div>
+      <div class="reader-footer"><span id="readingProgress">第 1 頁</span><span id="readingDirectionLabel">橫排閱讀</span></div>
+      <div id="controlsBackdrop" class="controls-backdrop" hidden></div>
+      <aside id="readerControls" class="reader-controls" hidden>
+        <div class="section-title-standalone"><button id="chapterTitleBtn" class="chapter-title-btn"><span id="chapterTitleText" class="chapter-title-text">第 1 章</span></button></div>
+        <div class="controls-row nav-row"><button id="prevChapter">上一章</button><button id="playBtn" class="play-control">▶ 朗讀</button><button id="nextChapter">下一章</button></div>
+        <div class="controls-row typographic-row"><button id="fontMinus">A−</button><span id="fontSizeText" class="readout">20</span><button id="fontPlus">A＋</button><button id="boldBtn" class="weight-button">粗體</button><button id="settingsBtn" class="soft-button">更多設定 ⚙</button></div>
+        <div class="spacing-row"><label for="spacingRange">行距／列距</label><input id="spacingRange" type="range" min="0.8" max="1.8" step="0.05" value="1.25"><span id="spacingValue">1.25×</span></div>
+        <div class="controls-row mini-row"><button id="directionBtn">橫排 ⇄ 直排</button><button id="followBtn">跟隨朗讀：關</button><button id="scriptBtn">原文／繁簡</button></div>
+      </aside>
+    </section>
+    <div id="overlay" class="overlay" hidden><div id="sheet" class="sheet" role="dialog" aria-modal="true"><div class="sheet-handle"></div><div class="sheet-top"><h2 id="sheetTitle"></h2><button id="closeSheet" class="icon-button" aria-label="關閉">×</button></div><div id="sheetContent" class="sheet-content"></div></div></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <div id="measure" class="page-body measure" aria-hidden="true"></div>
+    <input id="filePicker" type="file" accept=".txt,.epub,text/plain,application/epub+zip" multiple hidden>
+    <input id="backupPicker" type="file" accept=".json,application/json" hidden>
+  </div>
+  <script src="./vendor/jszip.min.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
