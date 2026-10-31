@@ -1,28 +1,22 @@
-# 麗華小說 iPhone PWA v1.0.3 — 穩定性修復版
+# 麗華小說 iPhone PWA v1.0.4 — 更多音色與背景播放說明
 
-**這版以原本 v1.0.2 為基礎，優先修復書架、翻頁、設定與語音按鈕可能失效的問題。**
+本版基於 **v1.0.3 穩定版**，只修改 iPhone 語音選項，不變更書架資料格式、TXT／EPUB 匯入、翻頁、閱讀位置、文字轉換或跟隨朗讀邏輯。
 
-修復內容：
-- 避免 GitHub Pages 的舊離線快取與新版 HTML/JavaScript 混用；更新網址帶 `?v=103`，畫面下方標示 `v1.0.3`。
-- 書架重新開啟時會重新讀取 IndexedDB，且會在讀取失敗時明確報錯，不會誤認為沒有書籍。
-- 原有書籍保留於相同站點的 IndexedDB，更新程式**不會清空**資料庫。
-- 再次匯入名稱、章節數、首尾章完全相同的小說時，不再增加重複副本；已存在的重複小說可逐本點「⋯」刪除。
-- 閱讀頁的章節載入、分頁、錯誤處理補上保護；排版過程每 12 頁讓出主執行緒，避免長章節使介面完全無回應。
-- 顯示程式錯誤提示，方便之後定位真正的 iPhone 專屬問題。
+## 新增
+- iPhone 中文語音列表顯示可用數量；按「重新搜尋可用聲音」重新讀取 Safari 的 `speechSynthesis.getVoices()`。
+- 可選擇列出其他語言的系統語音（**不代表能正確朗讀中文**）。
+- 新增「聲音音高」0.70～1.30 倍（音色調整，不是增加聲優）。
+- 新增 iPhone「設定 → 輔助使用 → 閱讀與朗讀 → 聲音」的操作指引，下載新聲音後回到 App 重新搜尋。
+- 保留原有試聽與語速調整。
 
-### 更新 GitHub Pages
+## 背景朗讀限制（重要）
+本版仍使用 iPhone Safari 的 Web Speech API（`speechSynthesis`）。**不能保證切換 App 或關閉螢幕後持續朗讀**，也不能藉由 Media Session 或隱藏音訊偽裝成持續背景朗讀。若需要穩定背景播放，需採「先生成／取得 MP3、M4A 等音訊 → HTML 音訊播放器」；這需要真正的語音音訊來源或受信任的雲端音訊合成服務，並非現在的 iPhone 內建 Web Speech API 可直接匯出。
 
-1. **先在 iPhone 的舊版使用「備份與還原 → 匯出所有書籍與進度」**。若無法進入，請不要清除網站資料、刪除 iPhone App 或換網址。
-2. 用 Windows 下載這個 ZIP，解壓縮後把檔案上傳到**原本的** GitHub Pages Repository 根目錄（`index.html` 應在根目錄）。用新增／取代方式更新，不需要先刪除整個 Repository，也不要暫時清空檔案。
-3. 等 Pages 發布成功後，iPhone 在 Safari **用原本網站網址後面加 `?v=103`** 開啟。例如 `https://帳號.github.io/LiHuaReader-PWA/?v=103`。看到書架底部 `v1.0.3` 才表示載入新版。
-4. 關閉主畫面 PWA，重新開啟；若仍是舊版，再開 Safari 的帶參數網址一次，**不要清除網站資料**。
+## 更新 GitHub Pages
+1. 先在舊版的「備份與還原」匯出備份；不要刪除 iPhone App 或清除 Safari 網站資料。
+2. 將本 ZIP **更新檔**（`app.js`、`index.html`、`styles.css`、`sw.js`、`library.js`、`package.json`、`README.md`）上傳至同一 Repository 的相同路徑，取代同名檔。
+3. 等 Pages 部署完成，用 Safari 開啟原網址加 `?v=104`，確認書架底部顯示 `v1.0.4`。再重新啟動主畫面 App。
+4. 進入「更多設定」，按「重新搜尋可用聲音」。
 
-### iPhone 資料與語音限制
-
-iPhone 的主畫面 PWA 與 Safari 分頁可能使用不同的網站資料儲存容器；在 Safari 看到的書架不一定是已安裝 PWA 的同一份書架。請在主畫面 App 內確認資料。語音受 iOS Web Speech API 限制，**這份修正未在真實 iPhone 上驗證朗讀成功**，仍可能需要單獨修正。
-
-### 測試
-
-`node --check app.js && node --check library.js && npm test`
-
-本版沒有修改或清除 IndexedDB 資料結構，只做相容性與錯誤處理修正。
+## 測試與風險
+已做 JS 語法、原有 Node 測試、靜態程式一致性檢查。尚未在真實 iPhone 上驗證不同語音是否會出現在 Safari 及背景狀態。PWA 與 Safari 分頁的資料儲存可能不同，請盡量從原主畫面 App 使用及備份。

@@ -95,7 +95,7 @@ export async function restoreLibrary(data){
     const p=item.position||{}; await savePosition(saved.id, Math.max(0,Math.min(saved.chapterCount-1,p.chapter||0)), Math.max(0,p.offset||0));count++;
   }
   if(data.settings && typeof data.settings==='object'){
-    const allowed=['direction','script','fontSize','lineSpacing','bold','theme','follow','rate','voiceURI','voiceName'];
+    const allowed=['direction','script','fontSize','lineSpacing','bold','theme','follow','rate','pitch','showOtherVoices','voiceURI','voiceName'];
     const safe=Object.fromEntries(Object.entries(data.settings).filter(([key])=>allowed.includes(key)));
     localStorage.setItem('lihuaSettings',JSON.stringify(safe));
   }

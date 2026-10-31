@@ -1,7 +1,7 @@
-// v1.0.3: network-first updates prevent mixing HTML and JavaScript from different releases.
+// v1.0.4: network-first updates prevent mixing HTML and JavaScript from different releases.
 // Only reader code is cached; imported books remain in local IndexedDB.
-const CACHE='lihua-reader-pwa-v1.0.3';
-const ASSETS=['./','./index.html','./styles.css?v=103','./app.js?v=103','./library.js?v=103','./converter.js?v=103','./manifest.webmanifest','./vendor/jszip.min.js?v=103','./icons/icon-192.png','./icons/icon-512.png','./icons/apple-touch-icon.png'];
+const CACHE='lihua-reader-pwa-v1.0.4';
+const ASSETS=['./','./index.html','./styles.css?v=104','./app.js?v=104','./library.js?v=104','./converter.js?v=104','./manifest.webmanifest','./vendor/jszip.min.js?v=104','./icons/icon-192.png','./icons/icon-512.png','./icons/apple-touch-icon.png'];
 self.addEventListener('install',event=>event.waitUntil(
   caches.open(CACHE).then(async cache=>{await Promise.allSettled(ASSETS.map(url=>cache.add(url)));}).then(()=>self.skipWaiting())
 ));

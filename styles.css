@@ -4,3 +4,5 @@
 .app-error{position:absolute;top:env(safe-area-inset-top);left:6px;right:6px;z-index:10000;background:#fff2f0;border:2px solid #bb5656;color:#7a2020;padding:12px;font-size:13px;line-height:1.6;max-height:140px;overflow:auto;border-radius:10px;box-shadow:0 1px 12px #0002}.app-error[hidden]{display:none!important}.loading-placeholder{font-size:17px;color:var(--muted);padding:24px 8px;line-height:1.6}
 /* Never let the transparent controls backdrop cover the header buttons. */
 .reader-head{z-index:5}
+
+.voice-pitch-controls{display:flex;gap:8px;align-items:center;max-width:55%;min-width:130px}.voice-pitch-controls input{flex:1;min-width:75px;accent-color:var(--accent)}.voice-pitch-controls span{font-size:12px;color:var(--muted);white-space:nowrap}.sheet-content a.sheet-cta{text-decoration:none}

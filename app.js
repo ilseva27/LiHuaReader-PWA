@@ -1,15 +1,15 @@
-import {openLibrary,listBooks,getBook,getChapter,getPosition,savePosition,updateBookOpen,removeBook,storeParsedBook,parseBookFile,exportLibrary,restoreLibrary} from './library.js?v=103';
-import {convertChinese} from './converter.js?v=103';
+import {openLibrary,listBooks,getBook,getChapter,getPosition,savePosition,updateBookOpen,removeBook,storeParsedBook,parseBookFile,exportLibrary,restoreLibrary} from './library.js?v=104';
+import {convertChinese} from './converter.js?v=104';
 
-const APP_VERSION='1.0.3';
+const APP_VERSION='1.0.4';
 const $ = id => document.getElementById(id);
-const defaults={direction:'horizontal',script:'original',fontSize:20,lineSpacing:1.25,bold:false,theme:'paper',follow:true,rate:1,voiceURI:'',voiceName:''};
+const defaults={direction:'horizontal',script:'original',fontSize:20,lineSpacing:1.25,bold:false,theme:'paper',follow:true,rate:1,pitch:1,showOtherVoices:false,voiceURI:'',voiceName:''};
 function readSettings(){
   try {return {...defaults,...JSON.parse(localStorage.getItem('lihuaSettings')||'{}')};}
   catch(e){console.warn('閱讀設定格式損壞，使用預設值',e);return {...defaults};}
 }
 const settings=readSettings();
-const state={book:null,chapter:null,chapterIndex:0,pages:[],pageIndex:0,paragraphs:[],readingOffset:0,speechOffset:0,controls:false,busy:false,loadToken:0,paginationToken:0,activeParagraph:-1,voices:[],tts:{status:'idle',token:0,chapter:0,offset:0,chunk:null,sleepDeadline:0,waitingForStart:false}};
+const state={book:null,chapter:null,chapterIndex:0,pages:[],pageIndex:0,paragraphs:[],readingOffset:0,speechOffset:0,controls:false,busy:false,loadToken:0,paginationToken:0,activeParagraph:-1,voices:[],allVoices:[],tts:{status:'idle',token:0,chapter:0,offset:0,chunk:null,sleepDeadline:0,waitingForStart:false}};
 const synthesis='speechSynthesis' in window ? window.speechSynthesis:null;
 let toastTimeout,resizeTimer,saveTimer;
 window.addEventListener('error',event=>{
@@ -311,15 +311,27 @@ async function returnToShelf(){
   await refreshShelf();
 }
 
+// Safari only exposes voices returned by Web Speech getVoices(); downloading a
+// system accessibility voice does not guarantee Safari will expose it.
+function isChineseVoice(v){return /^(zh|cmn|yue)(?:[-_]|$)/i.test(v.lang||'');}
 function refreshVoices(){
   if(!synthesis)return;
-  state.voices=synthesis.getVoices().filter(v=>/^(zh|cmn)/i.test(v.lang));
+  const found=synthesis.getVoices();
+  // Some iPhone releases populate this list after the first user interaction.
+  state.allVoices=Array.from(found);
+  state.voices=state.allVoices.filter(isChineseVoice).sort((a,b)=>{
+    const priority=v=>/^zh[-_]tw$/i.test(v.lang)?0:/^zh[-_]hk$/i.test(v.lang)?1:/^zh[-_]cn$/i.test(v.lang)?2:3;
+    return priority(a)-priority(b)||a.name.localeCompare(b.name);
+  });
 }
 function chooseVoice(){
-  const all=state.voices;
-  return all.find(v=>v.voiceURI===settings.voiceURI)||all.find(v=>v.name===settings.voiceName)||all.find(v=>v.lang.toLowerCase()==='zh-tw')||all.find(v=>v.lang.toLowerCase().startsWith('zh'))||null;
+  const all=state.allVoices;
+  const chosen=all.find(v=>v.voiceURI===settings.voiceURI)||all.find(v=>v.name===settings.voiceName);
+  // Avoid silently replacing a selected non-Chinese voice with an unrelated voice.
+  if(chosen)return chosen;
+  return state.voices.find(v=>/^zh[-_]tw$/i.test(v.lang))||state.voices[0]||null;
 }
-function makeUtterance(text){const utterance=new SpeechSynthesisUtterance(text);const v=chooseVoice();if(v)utterance.voice=v;utterance.lang=v?.lang||(settings.script==='simplified'?'zh-CN':'zh-TW');utterance.rate=settings.rate;utterance.pitch=1;return utterance;}
+function makeUtterance(text){const utterance=new SpeechSynthesisUtterance(text);const v=chooseVoice();if(v)utterance.voice=v;utterance.lang=v?.lang||(settings.script==='simplified'?'zh-CN':'zh-TW');utterance.rate=settings.rate;utterance.pitch=Math.min(1.3,Math.max(.7,Number(settings.pitch)||1));return utterance;}
 function stopSpeech(save=true){
   const t=state.tts;
   if(save && state.book&&t.status!=='idle'){
@@ -500,12 +512,43 @@ function showSettings(){showSheet('閱讀設定',root=>{
   const spaceValue=textEl('span','',settings.lineSpacing.toFixed(2)+'×');const s=makeRange(.8,1.8,.05,settings.lineSpacing,v=>{settings.lineSpacing=v;spaceValue.textContent=v.toFixed(2)+'×';persistSettings();repaginate(state.readingOffset);syncReaderControls();});const swrap=document.createElement('div');swrap.style.display='flex';swrap.style.alignItems='center';swrap.append(s,spaceValue);makeSettingRow(root,'行距／列距','即時調整',swrap);
   const rate=makeSelect([['0.75','0.75×'],['0.85','0.85×'],['1','1.0×'],['1.15','1.15×'],['1.3','1.3×'],['1.5','1.5×'],['1.75','1.75×'],['2','2×']],String(settings.rate),v=>{settings.rate=Number(v);persistSettings();notify('語速會從下一段朗讀開始套用');});makeSettingRow(root,'朗讀語速','',rate);
   refreshVoices();
-  const voices=state.voices;const voiceOptions=[['','自動選擇 iPhone 中文聲音'],...voices.map(v=>[v.voiceURI,v.name+'（'+v.lang+'）'])];
-  if(!voices.length)root.append(textEl('p','inline-hint','目前 Safari 尚未列出中文音色，可先按試聽；若有聲音，仍可使用系統預設語音。'));
-  makeSettingRow(root,'iPhone 語音','可用音色取決於 iPhone 的語音設定',makeSelect(voiceOptions,settings.voiceURI,v=>{const voice=voices.find(x=>x.voiceURI===v);settings.voiceURI=v;settings.voiceName=voice?.name||'';persistSettings();}));
+  const voiceInfo=textEl('p','inline-hint','');
+  const voiceRow=document.createElement('div');voiceRow.className='setting-row';
+  const voiceNames=document.createElement('div');voiceNames.append(textEl('span','','iPhone 語音'));voiceNames.append(textEl('small','','優先使用中文；可以重新搜尋手機提供的聲音'));
+  const voiceSelect=document.createElement('select');voiceSelect.setAttribute('aria-label','選擇朗讀聲音');
+  voiceSelect.onchange=()=>{
+    const selected=state.allVoices.find(v=>v.voiceURI===voiceSelect.value);
+    settings.voiceURI=voiceSelect.value;settings.voiceName=selected?.name||'';persistSettings();
+    notify('已選擇聲音，可按試聽確認；朗讀中的音色從下一段開始套用');
+  };
+  voiceRow.append(voiceNames,voiceSelect);root.append(voiceRow);
+  const buildVoiceOptions=()=>{
+    const voices=settings.showOtherVoices?state.allVoices:state.voices;
+    const opts=[['','自動選擇中文語音'],...voices.map(v=>[v.voiceURI,`${v.name}（${v.lang}）`])];
+    // A previously selected voice is kept in the UI even if the browser hasn't loaded it yet.
+    if(settings.voiceURI&&!opts.some(([v])=>v===settings.voiceURI))opts.push([settings.voiceURI,`上次音色：${settings.voiceName||settings.voiceURI}（目前不可用）`]);
+    voiceSelect.replaceChildren(...opts.map(([v,label])=>{const el=document.createElement('option');el.value=v;el.textContent=label;return el;}));
+    voiceSelect.value=settings.voiceURI||'';
+    voiceInfo.textContent=`Safari 目前提供 ${state.voices.length} 種中文音色、總共 ${state.allVoices.length} 種語音。${settings.showOtherVoices?'其他語言朗讀中文可能不準確。':'可先在 iPhone 設定下載其他中文聲音，再回來重新搜尋。'}`;
+  };
+  root.append(voiceInfo);
+  makeSettingRow(root,'顯示其他語言音色','非中文聲音可能無法正確朗讀中文',makeCheckbox(settings.showOtherVoices,value=>{settings.showOtherVoices=value;persistSettings();buildVoiceOptions();}));
+  sheetButton(root,'↻ 重新搜尋可用聲音',()=>{refreshVoices();buildVoiceOptions();notify(`已找到 ${state.voices.length} 種中文語音`);});
+  const pitchLabel=textEl('span','',`${Number(settings.pitch).toFixed(2)}×`);
+  const pitchRange=makeRange(.7,1.3,.05,Number(settings.pitch)||1,value=>{settings.pitch=value;pitchLabel.textContent=value.toFixed(2)+'×';persistSettings();});
+  const pitchWrap=document.createElement('div');pitchWrap.className='voice-pitch-controls';pitchWrap.append(pitchRange,pitchLabel);
+  makeSettingRow(root,'聲音音高','低沉 ← 原音 → 明亮（不是新的配音員）',pitchWrap);
+  buildVoiceOptions();
   sheetButton(root,'▶ 試聽選擇的聲音',()=>{stopSpeech();testIPhoneVoice();});
+  sheetButton(root,'如何在 iPhone 加入其他中文語音',()=>showVoiceInstructions());
   sheetButton(root,'⏱ 睡眠定時',()=>showSleepOptions());
-  root.append(textEl('p','notice','iPhone PWA 的語音依賴 Safari Web Speech API。切換 App 或鎖定螢幕後可能中斷，無法保證與 Android 原生背景朗讀相同。'));
+  root.append(textEl('p','notice','背景播放限制：iPhone 網頁語音 speechSynthesis 在鎖定螢幕或切換 App 後可能停止。此版不能保證背景朗讀；若要穩定播放需改用預先製作的音訊檔，不能直接把系統語音輸出存成 MP3。'));
+});}
+function showVoiceInstructions(){showSheet('增加 iPhone 中文聲音',root=>{
+  root.append(textEl('p','notice','iPhone 設定 → 輔助使用 → 閱讀與朗讀 → 聲音，選擇中文（臺灣／中國大陸／香港），可下載可用音色。不同 iOS 版本的名稱可能不同。'));
+  root.append(textEl('p','inline-hint','下載完後，回到麗華小說的「閱讀設定」，按「重新搜尋可用聲音」。Safari 不一定會列出每個系統音色，因此實際增加數量以手機顯示為準。'));
+  const link=document.createElement('a');link.href='https://support.apple.com/zh-tw/guide/iphone/iph96b214f0/ios';link.target='_blank';link.rel='noopener noreferrer';link.className='sheet-cta';link.textContent='Apple 官方：閱讀與朗讀設定';root.append(link);
+  sheetButton(root,'返回閱讀設定',showSettings);
 });}
 function showSleepOptions(){showSheet('睡眠定時',root=>{
   for(const mins of [0,15,30,60])sheetButton(root,mins===0?'關閉定時':`${mins} 分鐘後停止`,()=>{
@@ -583,7 +626,7 @@ async function initialize(){
   try{await openLibrary();await refreshShelf();}
   catch(e){console.error(e);notify('無法存取本機書架，請確認 Safari 非私密瀏覽模式',6500);}
   if('serviceWorker' in navigator && /^https?:/.test(location.protocol)){
-    navigator.serviceWorker.register('./sw.js?v=103', {updateViaCache:'none'}).catch(e=>console.warn('Offline setup failed',e));
+    navigator.serviceWorker.register('./sw.js?v=104', {updateViaCache:'none'}).catch(e=>console.warn('Offline setup failed',e));
   }
 }
 initialize();
