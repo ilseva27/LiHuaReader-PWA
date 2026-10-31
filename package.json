@@ -1,1 +1,1 @@
-{"name":"lihua-reader-pwa","private":true,"version":"1.0.0","type":"module","scripts":{"test":"node tests/basic.mjs"}}
+{"name":"lihua-reader-pwa","private":true,"version":"1.0.2","type":"module","scripts":{"test":"node tests/basic.mjs"}}

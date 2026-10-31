@@ -4,7 +4,7 @@ import {convertChinese} from './converter.js';
 const $ = id => document.getElementById(id);
 const defaults={direction:'horizontal',script:'original',fontSize:20,lineSpacing:1.25,bold:false,theme:'paper',follow:true,rate:1,voiceURI:'',voiceName:''};
 const settings={...defaults,...JSON.parse(localStorage.getItem('lihuaSettings')||'{}')};
-const state={book:null,chapter:null,chapterIndex:0,pages:[],pageIndex:0,paragraphs:[],readingOffset:0,speechOffset:0,controls:false,busy:false,loadToken:0,activeParagraph:-1,voices:[],tts:{status:'idle',token:0,chapter:0,offset:0,chunk:null,sleepDeadline:0}};
+const state={book:null,chapter:null,chapterIndex:0,pages:[],pageIndex:0,paragraphs:[],readingOffset:0,speechOffset:0,controls:false,busy:false,loadToken:0,activeParagraph:-1,voices:[],tts:{status:'idle',token:0,chapter:0,offset:0,chunk:null,sleepDeadline:0,waitingForStart:false}};
 const synthesis='speechSynthesis' in window ? window.speechSynthesis:null;
 let toastTimeout,resizeTimer,saveTimer;
 
@@ -15,9 +15,9 @@ function bookSubtitle(book){return `${book.format} · ${book.chapterCount} 個�
 function textEl(tag,cls,text){const el=document.createElement(tag);if(cls)el.className=cls;el.textContent=text;return el;}
 function syncReaderControls(){
   $('readerControls').hidden=!state.controls;$('controlsBackdrop').hidden=!state.controls;
-  $('playBtn').textContent=state.tts.status==='playing'?'Ⅱ 暫停':state.tts.status==='paused'?'▶ 繼續':'▶ 朗讀';
-  $('headphoneBtn').textContent=state.tts.status==='playing'?'⏸':'🎧';
-  $('headphoneBtn').title=state.tts.status==='playing'?'暫停朗讀':'開始／繼續朗讀';
+  $('playBtn').textContent=state.tts.waitingForStart?'↻ 重試朗讀':state.tts.status==='playing'?'Ⅱ 暫停':state.tts.status==='paused'?'▶ 繼續':'▶ 朗讀';
+  $('headphoneBtn').textContent=state.tts.waitingForStart?'⏳':state.tts.status==='playing'?'⏸':'🎧';
+  $('headphoneBtn').title=state.tts.waitingForStart?'語音啟動中；若無聲可再點一次重試':state.tts.status==='playing'?'暫停朗讀':'開始／繼續朗讀';
   $('boldBtn').classList.toggle('selected',settings.bold);
   $('followBtn').classList.toggle('selected',settings.follow);
   $('followBtn').textContent=`跟隨朗讀：${settings.follow?'開':'關'}`;
@@ -66,13 +66,25 @@ async function importFiles(files){
       if(file.size>90*1024*1024)throw Error('檔案超過 90 MB，請使用較小的檔案');
       const parsed=await parseBookFile(file);
       await storeParsedBook(parsed);done++;
-    }catch(e){console.error(e);errors.push(`${file.name}：${e.message||e}`);}
+    }catch(e){console.error(e);errors.push(`${file.name||'未命名檔案'}：${friendlyImportError(e)}`);}
   }
   $('importBtn').disabled=false;$('importShelfBtn').disabled=false;
-  await refreshShelf();
-  if(errors.length)notify(`成功 ${done} 本；失敗：${errors[0]}`,6500);
-  else notify(`已匯入 ${done} 本小說`);
+  try{await refreshShelf();}catch(e){console.error('Refresh shelf',e);errors.push(`書架更新：${friendlyImportError(e)}`);}
+  if(errors.length){
+    showSheet('小說匯入結果',root=>{
+      root.append(textEl('p','inline-hint',`成功 ${done} 本，失敗 ${errors.length} 本。以下是具體原因：`));
+      for(const error of errors)root.append(textEl('p','notice',error));
+      root.append(textEl('p','inline-hint','如果需要協助，請把上方錯誤文字截圖給我；不需要上傳私人小說內容。'));
+    });
+    notify(`匯入 ${done} 本成功，${errors.length} 本失敗`,6000);
+  }else notify(`已匯入 ${done} 本小說`);
   $('filePicker').value='';
+}
+function friendlyImportError(e){
+  const raw=e?.message||String(e);
+  if(e?.name==='QuotaExceededError'||/quota|storage.*full|磁碟空間/i.test(raw))return 'iPhone 儲存空間不足或 Safari 網站儲存配額已滿。請先備份現有書籍並清理空間。';
+  if(e?.name==='UnknownError'&&/database|transaction/i.test(raw))return '本機書架資料庫發生錯誤，請關閉 App 後重新開啟再試。';
+  return raw;
 }
 
 function splitParagraphs(text){
@@ -87,7 +99,7 @@ function splitParagraphs(text){
 }
 function contentForChapter(chapter){return convertChinese(chapter.text,settings.script);}
 function readerDimensions(){return $('pageBody').getBoundingClientRect();}
-function paragraphNode(part,active=false){const p=document.createElement('p');p.className='paragraph'+(part.continued?' continuation':'')+(part.pIndex===state.activeParagraph && active?' is-active':'');p.textContent=part.text;return p;}
+function paragraphNode(part,active=false){const p=document.createElement('p');p.className='paragraph'+(part.continued?' continuation':'')+(part.pIndex===state.activeParagraph && active?' is-active':'');p.dataset.pindex=String(part.pIndex);p.textContent=part.text;return p;}
 function updateReadStyles(){
   for(const node of [$('pageBody'),$('measure')]){
     node.classList.toggle('vertical',settings.direction==='vertical');node.classList.toggle('horizontal',settings.direction==='horizontal');
@@ -194,8 +206,12 @@ async function loadChapter(index,offset=0,{save=true,keepSpeech=false}={}){
 }
 function goPage(step,{auto=false}={}){
   if(!state.book||state.busy)return;
-  if(!auto && settings.follow && state.tts.status==='playing')return;
+  if(!auto && settings.follow && state.tts.status==='playing' && !state.tts.waitingForStart)return;
   const next=state.pageIndex+step;
+  // A manual page turn after pause means 'continue from this new page', not the old speech cursor.
+  if(!auto && state.tts.status==='paused' && (next>=0&&next<state.pages.length || next<0&&state.chapterIndex>0 || next>=state.pages.length&&state.chapterIndex<state.book.chapterCount-1)){
+    stopSpeech(false);
+  }
   if(next>=0&&next<state.pages.length){
     state.pageIndex=next;renderPage();
     if(!auto){state.readingOffset=state.pages[next].start;scheduleSavePosition(state.chapterIndex,state.readingOffset);}
@@ -239,7 +255,7 @@ function stopSpeech(save=true){
     savePosition(state.book.id,t.chapter,t.offset).catch(console.error);
     if(t.chapter===state.chapterIndex)state.readingOffset=t.offset;
   }
-  t.token++;t.status='idle';t.chunk=null;
+  t.token++;t.status='idle';t.chunk=null;t.waitingForStart=false;
   if(synthesis)try{synthesis.cancel();}catch{}
   state.activeParagraph=-1;
   if(!state.book)return;
@@ -253,7 +269,7 @@ function resumeSpeech(){if(!synthesis)return;
   try{synthesis.resume();state.tts.status='playing';}catch(e){console.error(e);}
   syncReaderControls();
 }
-function nextTextChunk(chapterText,offset){
+function nextTextChunk(chapterText,offset,{quickStart=false}={}){
   const after=chapterText.slice(offset);
   const spaces=after.match(/^\s*/)?.[0].length||0;
   const start=offset+spaces;
@@ -262,50 +278,101 @@ function nextTextChunk(chapterText,offset){
   const newline=rest.indexOf('\n');const paragraphText=(newline>=0?rest.slice(0,newline):rest).trimEnd();
   if(!paragraphText)return nextTextChunk(chapterText,start+Math.max(1,newline+1));
   // Preserve original paragraphs. Split only overly long paragraphs to keep iOS speech responsive.
-  const maximum=165;
+  // On iOS a very long first utterance can remain silent until the voice engine warms up.
+  // Start with real novel text (never a spoken test phrase), then continue normally.
+  const maximum=quickStart?36:165;
   let count=Math.min(paragraphText.length,maximum);
   if(paragraphText.length>maximum){
     const prefix=paragraphText.slice(0,maximum);
-    const m=Array.from(prefix.matchAll(/[。！？!?；;，、, ]/g)).filter(x=>x.index>65).at(-1);
+    const minBreak=quickStart?10:65;
+    const m=Array.from(prefix.matchAll(/[。！？!?；;，、, ]/g)).filter(x=>x.index>=minBreak).at(-1);
     if(m)count=m.index+1;
   }
   const pIndex=state.paragraphs.findIndex(p=>start>=p.start&&start<p.end);
   return {text:chapterText.slice(start,start+count),start,end:start+count,pIndex};
 }
-async function startSpeech(){
+function testIPhoneVoice(){
+  if(!synthesis||typeof SpeechSynthesisUtterance==='undefined'){
+    notify('此 iPhone 瀏覽器沒有提供網頁語音功能',6500);return;
+  }
+  refreshVoices();
+  try{
+    if(synthesis.speaking||synthesis.pending||synthesis.paused)synthesis.cancel();
+    // Must speak directly in the button tap, without await / setTimeout, on iOS WebKit.
+    const u=makeUtterance('你好，這是麗華小說的中文語音測試。');
+    let started=false;
+    const check=setTimeout(()=>{if(!started)notify('語音尚未開始：請調高媒體音量，確認 iPhone 中文語音可用，然後再點一次試聽。',8500);},9000);
+    u.onstart=()=>{started=true;clearTimeout(check);notify('語音測試開始播放');};
+    u.onerror=e=>{clearTimeout(check);notify(`語音測試失敗：${e.error||'未提供原因'}`,6500);};
+    u.onend=()=>clearTimeout(check);
+    synthesis.speak(u);
+  }catch(e){console.error(e);notify('語音測試無法啟動：'+e.message,6500);}
+}
+function startSpeech(){
   if(!synthesis){notify('此瀏覽器不支援語音朗讀');return;}
   if(!state.book||state.busy)return;
-  if(state.tts.status==='playing'){pauseSpeech();return;}
-  if(state.tts.status==='paused'){resumeSpeech();return;}
+  if(state.tts.status==='playing' && state.tts.waitingForStart){
+    // A second user tap is itself a fresh Safari gesture. Retry rather than pausing silent audio.
+    stopSpeech(false);
+  }else if(state.tts.status==='playing'){pauseSpeech();return;}
+  if(state.tts.status==='paused'){
+    // When the current page has changed since pause, start from the displayed page.
+    if(state.tts.chapter===state.chapterIndex && pageOfOffset(state.tts.offset)===state.pageIndex){resumeSpeech();return;}
+    stopSpeech(false);state.readingOffset=state.pages[state.pageIndex]?.start||0;
+  }
   refreshVoices();
-  try{synthesis.cancel();}catch{}
-  state.tts.token++;state.tts.status='playing';state.tts.chapter=state.chapterIndex;state.tts.offset=state.readingOffset;
+  try{if(synthesis.speaking||synthesis.pending||synthesis.paused)synthesis.cancel();}catch{}
+  state.tts.token++;state.tts.status='playing';state.tts.waitingForStart=true;state.tts.chapter=state.chapterIndex;state.tts.offset=state.readingOffset;
   syncReaderControls();
-  speakNext(state.tts.token);
+  // Critical iPhone fix: avoid awaiting IndexedDB before first speechSynthesis.speak().
+  // The current chapter is already in memory from loadChapter().
+  speakNext(state.tts.token,state.chapter,true);
 }
-async function speakNext(token){
+function speakNext(token,loadedChapter=null,quickStart=false){
   const t=state.tts;if(token!==t.token||t.status==='idle'||!state.book)return;
   if(t.sleepDeadline&&Date.now()>=t.sleepDeadline){stopSpeech();notify('睡眠定時已到，朗讀停止');return;}
-  const chapter=await getChapter(state.book.id,t.chapter);
-  if(token!==t.token||t.status==='idle'||!chapter)return;
+  const chapter=loadedChapter || (t.chapter===state.chapterIndex?state.chapter:null);
+  if(!chapter){
+    getChapter(state.book.id,t.chapter).then(ch=>{
+      if(token!==t.token||t.status==='idle')return;
+      if(!ch){stopSpeech();notify('朗讀失敗：找不到章節內容',6000);return;}
+      speakNext(token,ch);
+    }).catch(e=>{console.error(e);if(token===t.token){stopSpeech();notify('朗讀讀取失敗：'+e.message,6500);}});
+    return;
+  }
   const full=contentForChapter(chapter);
   if(t.offset>=full.length){
     if(t.chapter+1>=state.book.chapterCount){stopSpeech();notify('已朗讀完這本小說');return;}
     t.chapter++;t.offset=0;
-    if(settings.follow)await loadChapter(t.chapter,0,{save:false,keepSpeech:true});
-    if(token===t.token)speakNext(token);return;
+    const nextChapter=t.chapter;
+    const readNext=()=>getChapter(state.book.id,nextChapter).then(ch=>{
+      if(token!==t.token||t.status==='idle')return;
+      if(!ch){stopSpeech();notify('下一章讀取失敗');return;}
+      speakNext(token,ch);
+    });
+    if(settings.follow){
+      loadChapter(nextChapter,0,{save:false,keepSpeech:true}).then(readNext).catch(e=>{console.error(e);if(token===t.token){stopSpeech();notify('載入下一章失敗：'+e.message,6500);}});
+    }else readNext().catch(e=>{console.error(e);if(token===t.token){stopSpeech();notify('讀取下一章失敗：'+e.message,6500);}});
+    return;
   }
-  const chunk=nextTextChunk(full,t.offset);
+  const chunk=nextTextChunk(full,t.offset,{quickStart});
   if(!chunk){t.offset=full.length;speakNext(token);return;}
   const utterance=makeUtterance(chunk.text);
   t.chunk=chunk;
+  let started=false;
+  const startupWatchdog=setTimeout(()=>{
+    if(token!==t.token||t.status!=='playing'||started)return;
+    notify('語音沒有啟動，請再點一次耳機重試；不需要先到設定試聽。',8500);
+  },11000);
   utterance.onstart=()=>{
     if(token!==t.token)return;
+    started=true;clearTimeout(startupWatchdog);t.waitingForStart=false;syncReaderControls();
     t.offset=chunk.start;state.speechOffset=chunk.start;
     savePosition(state.book.id,t.chapter,chunk.start).catch(console.error);
-    if(settings.follow && t.chapter===state.chapterIndex){
+    if(t.chapter===state.chapterIndex){
       state.activeParagraph=chunk.pIndex;
-      followOffset(chunk.start);displayFollowHighlight();
+      if(settings.follow)followOffset(chunk.start);
+      displayFollowHighlight();
     }
   };
   utterance.onboundary=e=>{
@@ -313,19 +380,33 @@ async function speakNext(token){
     const pos=Math.min(chunk.end,chunk.start+e.charIndex);
     t.offset=pos;state.speechOffset=pos;
     // Boundary events may be unavailable on Safari; chunk start/end still persist progress.
-    if(settings.follow&&t.chapter===state.chapterIndex){followOffset(pos);}
+    if(t.chapter===state.chapterIndex){
+      // Safari fires boundary events during a paragraph; keep its highlight visible.
+      const pIndex=state.paragraphs.findIndex(p=>pos>=p.start&&pos<p.end);
+      if(pIndex>=0)state.activeParagraph=pIndex;
+      if(settings.follow)followOffset(pos);
+      displayFollowHighlight();
+    }
   };
   utterance.onend=()=>{
+    clearTimeout(startupWatchdog);
     if(token!==t.token)return;
+    t.waitingForStart=false;
+    if(!started){
+      // Some iOS versions emit onend without ever starting audible speech. Never skip text.
+      t.status='idle';syncReaderControls();
+      notify('iPhone 語音未成功啟動，請再點耳機重試；不需要先試聽。',8500);return;
+    }
     t.offset=chunk.end;savePosition(state.book.id,t.chapter,t.offset).catch(console.error);
     if(t.status==='playing')speakNext(token);
   };
   utterance.onerror=e=>{
+    clearTimeout(startupWatchdog);
     if(token!==t.token)return;
     if(e.error==='interrupted'||e.error==='canceled')return;
     const message=e.error||'未知錯誤';stopSpeech();notify(`朗讀中斷：${message}。iPhone 鎖定螢幕時可能中斷。`,6000);
   };
-  try{synthesis.speak(utterance);}catch(e){console.error(e);stopSpeech();notify('無法開始朗讀，請確認 iPhone 語音設定');}
+  try{synthesis.speak(utterance);}catch(e){clearTimeout(startupWatchdog);console.error(e);stopSpeech();notify('無法開始朗讀，請確認 iPhone 語音設定');}
 }
 
 function showToc(){if(!state.book)return;
@@ -349,8 +430,9 @@ function showSettings(){showSheet('閱讀設定',root=>{
   const rate=makeSelect([['0.75','0.75×'],['0.85','0.85×'],['1','1.0×'],['1.15','1.15×'],['1.3','1.3×'],['1.5','1.5×'],['1.75','1.75×'],['2','2×']],String(settings.rate),v=>{settings.rate=Number(v);persistSettings();notify('語速會從下一段朗讀開始套用');});makeSettingRow(root,'朗讀語速','',rate);
   refreshVoices();
   const voices=state.voices;const voiceOptions=[['','自動選擇 iPhone 中文聲音'],...voices.map(v=>[v.voiceURI,v.name+'（'+v.lang+'）'])];
+  if(!voices.length)root.append(textEl('p','inline-hint','目前 Safari 尚未列出中文音色，可先按試聽；若有聲音，仍可使用系統預設語音。'));
   makeSettingRow(root,'iPhone 語音','可用音色取決於 iPhone 的語音設定',makeSelect(voiceOptions,settings.voiceURI,v=>{const voice=voices.find(x=>x.voiceURI===v);settings.voiceURI=v;settings.voiceName=voice?.name||'';persistSettings();}));
-  sheetButton(root,'▶ 試聽選擇的聲音',()=>{if(!synthesis)return notify('此瀏覽器不支援語音');stopSpeech();const u=makeUtterance('你好，歡迎使用麗華小說。現在開始享受閱讀時光。');synthesis.speak(u);});
+  sheetButton(root,'▶ 試聽選擇的聲音',()=>{stopSpeech();testIPhoneVoice();});
   sheetButton(root,'⏱ 睡眠定時',()=>showSleepOptions());
   root.append(textEl('p','notice','iPhone PWA 的語音依賴 Safari Web Speech API。切換 App 或鎖定螢幕後可能中斷，無法保證與 Android 原生背景朗讀相同。'));
 });}
@@ -383,6 +465,7 @@ function wireEvents(){
   const picker=$('filePicker');$('importBtn').onclick=$('importShelfBtn').onclick=()=>picker.click();picker.onchange=()=>importFiles(Array.from(picker.files));
   $('sampleBtn').onclick=async()=>{const b=await storeParsedBook(createSampleBook());await refreshShelf();openBook(b.id);};
   $('backupBtn').onclick=showBackup;
+  $('voiceTestBtn').onclick=testIPhoneVoice;
   $('backupPicker').onchange=async e=>{const file=e.target.files?.[0];if(!file)return;try{const data=JSON.parse(await file.text());const n=await restoreLibrary(data);
     try{Object.assign(settings,JSON.parse(localStorage.getItem('lihuaSettings')||'{}'));applyTheme();syncReaderControls();}catch{}
     closeSheet();await refreshShelf();notify(`已還原 ${n} 本小說`);}catch(err){notify('備份還原失敗：'+err.message);}finally{$('backupPicker').value='';}};
